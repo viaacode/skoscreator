@@ -1,0 +1,131 @@
+#!/usr/bin/env node
+
+var N3 = require('n3'),
+    libxmljs = require("libxmljs"),
+    fs = require('fs'),
+    u = require('util');
+
+var file = fs.readFileSync('../../VRT_Thesaurus_Avid kopie.XML', 'utf8'),
+    prefixes = {},
+    writer = N3.Writer({ prefixes: prefixes });
+
+var ConceptScheme = "http://www.w3.org/2004/02/skos/core#ConceptScheme",
+    Concept = "http://www.w3.org/2004/02/skos/core#Concept",
+    a = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+    inScheme = "http://www.w3.org/2004/02/skos/core#inScheme",
+    narrower = "http://www.w3.org/2004/02/skos/core#narrower",
+    broader = "http://www.w3.org/2004/02/skos/core#broader",
+    prefLabel = "http://www.w3.org/2004/02/skos/core#prefLabel",
+    scopeNote = "http://www.w3.org/2004/02/skos/core#scopeNote",
+    related = "http://www.w3.org/2004/02/skos/core#related",
+    altLabel = "http://www.w3.org/2004/02/skos/core#altLabel";
+
+var baseUri = "http://example.com/",
+    thesaurusInstance = baseUri + "thesaurus/VRT";
+
+process.stderr.write('> Parsing XML...\n');
+
+var o = libxmljs.parseXml(file);
+
+process.stderr.write('> Writing...\n');
+
+writer.addTriple(t(thesaurusInstance, a, ConceptScheme));
+
+var ids_PERSONEN_EN_TITELS = [];
+var lastId = -1;
+
+var ETerms = o.get("//Thesauri/Thesaurus/Terms");
+var cn = ETerms.childNodes();
+var totalChildren = cn.length;
+cn.forEach(function(child, i) {
+  process.stderr.write(u.format("> Process term %d / %d (%d %)\r", i + 1, totalChildren, ((i + 1) / totalChildren * 100).toFixed(0)));
+  if(child.name() == "Term") {
+    var id = child.attr("id").value();
+    lastId = Math.max(lastId, id);
+    var conceptInstance = baseUri + "concept/" + id;
+    writer.addTriple(t(conceptInstance, a, Concept));
+    writer.addTriple(t(conceptInstance, inScheme, thesaurusInstance));
+
+    if(child.attr("ParentId")) {
+      var parentId = child.attr("ParentId").value();
+      var parentInstance  = baseUri + "concept/" + parentId;
+      writer.addTriple(t(conceptInstance, broader, parentInstance));
+      writer.addTriple(t(parentInstance, narrower, conceptInstance));
+    }
+
+    var EL10ns = child.get("Localizations");
+    EL10ns.childNodes().forEach(function(l10n) {
+      if (l10n.name() == "Localization") {
+        var culture = l10n.attr("Culture").value();
+        l10n.childNodes().forEach(function (c) {
+          if (c.name() == "Label") {
+            var label = N3.Util.createLiteral(c.text(), culture);
+            writer.addTriple(t(conceptInstance, prefLabel, label));
+
+            if(culture == "en" && c.text().indexOf("PERSONEN EN TITELS") == 0) {
+              ids_PERSONEN_EN_TITELS.push(id);
+            }
+
+          } else if (c.name() == "Synonyms") {
+            c.childNodes().forEach(function (syn) {
+              if (syn.name() == "Synonym") {
+                var label = N3.Util.createLiteral(syn.text(), culture);
+                writer.addTriple(t(conceptInstance, altLabel, label));
+              }
+            });
+          } else if (c.name() == "Scopenote") {
+            var note = N3.Util.createLiteral(c.text(), culture);
+            writer.addTriple(t(conceptInstance, scopeNote, note));
+          } else if (c.name() != "text") {
+            throw new Error("Found an l10n child with name " + c.name());
+          }
+        });
+      } else if(l10n.name() != "text") {
+        throw new Error("Found an Localizations child with name " + c.name());
+      }
+    });
+  } else if(child.name() != "text") {
+    throw new Error("Found an Terms child with name " + c.name());
+  }
+});
+process.stderr.write('\n');
+
+// Hardcode some additional category above "PERSONEN EN TITELS [x]"
+var personenEnTitels = baseUri + "concept/" + ++lastId;
+writer.addTriple(t(personenEnTitels, a, Concept));
+writer.addTriple(t(personenEnTitels, inScheme, thesaurusInstance));
+["en", "nl_BE"].forEach(function(culture) {
+  var label = N3.Util.createLiteral("PERSONEN EN TITELS", culture);
+  writer.addTriple(t(personenEnTitels, prefLabel, label));
+});
+ids_PERSONEN_EN_TITELS.forEach(function(p) {
+  writer.addTriple(t(baseUri + "concept/" + p, broader, personenEnTitels));
+  writer.addTriple(t(personenEnTitels, narrower, baseUri + "concept/" + p));
+});
+
+var ERel = o.get("//Thesauri/Thesaurus/Relations");
+var rn = ERel.childNodes();
+var totalRelations = rn.length;
+rn.forEach(function(child, i) {
+  process.stderr.write(u.format("> Process relation %d / %d (%d %)\r", i + 1, totalRelations, ((i + 1) / totalRelations * 100).toFixed(0)));
+  if(child.name() == "Relation") {
+    var id1 = child.attr("Term1").value();
+    var id2 = child.attr("Term2").value();
+    var conceptInstance1 = baseUri + "concept/" + id1;
+    var conceptInstance2 = baseUri + "concept/" + id2;
+    writer.addTriple(t(conceptInstance1, related, conceptInstance2));
+  } else if(child.name() != "text") {
+    throw new Error("Found a Relations child with name " + c.name());
+  }
+});
+process.stderr.write('\n');
+
+writer.end(function (error, result) { console.log(result); });
+
+function t(s, p, o) {
+  return {
+    subject:   s,
+    predicate: p,
+    object:    o
+  };
+}
