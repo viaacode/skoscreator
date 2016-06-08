@@ -1,6 +1,6 @@
 {
-  "name": "custom-mapper",
-  "version": "0.0.0",
+  "name": "skoscreator",
+  "version": "1.0.0",
   "private": true,
   "dependencies": {
     "n3": "~0.4.4",

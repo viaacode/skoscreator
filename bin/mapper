@@ -1,51 +1,60 @@
 #!/usr/bin/env node
+// This scripts takes the path to a thesaurus xml file as first input argument and outputs it in skos using turtle serialization
 
-var N3 = require('n3'),
+var N3       = require('n3'),
     libxmljs = require("libxmljs"),
-    fs = require('fs'),
-    u = require('util');
+    fs       = require('fs'),
+    u        = require('util');
 
-var file = fs.readFileSync('../../VRT_Thesaurus_Avid kopie.XML', 'utf8'),
+var file     = fs.readFileSync(process.argv[2], 'utf8'),
     prefixes = {},
-    writer = N3.Writer({ prefixes: prefixes });
+    writer   = N3.Writer({ prefixes: prefixes });
 
-var ConceptScheme = "http://www.w3.org/2004/02/skos/core#ConceptScheme",
-    Concept = "http://www.w3.org/2004/02/skos/core#Concept",
-    a = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
-    inScheme = "http://www.w3.org/2004/02/skos/core#inScheme",
-    narrower = "http://www.w3.org/2004/02/skos/core#narrower",
-    broader = "http://www.w3.org/2004/02/skos/core#broader",
-    prefLabel = "http://www.w3.org/2004/02/skos/core#prefLabel",
-    scopeNote = "http://www.w3.org/2004/02/skos/core#scopeNote",
-    related = "http://www.w3.org/2004/02/skos/core#related",
-    altLabel = "http://www.w3.org/2004/02/skos/core#altLabel";
+var ConceptScheme    = "http://www.w3.org/2004/02/skos/core#ConceptScheme",
+    Concept          = "http://www.w3.org/2004/02/skos/core#Concept",
+    a                = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type",
+    inScheme         = "http://www.w3.org/2004/02/skos/core#inScheme",
+    narrower         = "http://www.w3.org/2004/02/skos/core#narrower",
+    broader          = "http://www.w3.org/2004/02/skos/core#broader",
+    prefLabel        = "http://www.w3.org/2004/02/skos/core#prefLabel",
+    scopeNote        = "http://www.w3.org/2004/02/skos/core#scopeNote",
+    related          = "http://www.w3.org/2004/02/skos/core#related",
+    altLabel         = "http://www.w3.org/2004/02/skos/core#altLabel";
 
-var baseUri = "http://example.com/",
-    thesaurusInstance = baseUri + "thesaurus/VRT";
+var baseUri           = "http://example.com/",
+    thesaurusInstance = baseUri + "thesaurus/VRT"; // TODO: this base URI should be changed
 
 process.stderr.write('> Parsing XML...\n');
 
+// Virtual object that contains our parsed thesaurus file
 var o = libxmljs.parseXml(file);
 
 process.stderr.write('> Writing...\n');
 
+// Add thesaurus metadata
 writer.addTriple(t(thesaurusInstance, a, ConceptScheme));
 
+// Save all terms that contain 'PERSONEN EN TITELS', to be used to create a new super category
 var ids_PERSONEN_EN_TITELS = [];
+// Counter to discover the max term id
 var lastId = -1;
 
+// Loop over all thesaurus terms
 var ETerms = o.get("//Thesauri/Thesaurus/Terms");
 var cn = ETerms.childNodes();
 var totalChildren = cn.length;
 cn.forEach(function(child, i) {
   process.stderr.write(u.format("> Process term %d / %d (%d %)\r", i + 1, totalChildren, ((i + 1) / totalChildren * 100).toFixed(0)));
+  
   if(child.name() == "Term") {
+    // Write the term as concept
     var id = child.attr("id").value();
     lastId = Math.max(lastId, id);
     var conceptInstance = baseUri + "concept/" + id;
     writer.addTriple(t(conceptInstance, a, Concept));
     writer.addTriple(t(conceptInstance, inScheme, thesaurusInstance));
 
+    // Link this concept to its parent
     if(child.attr("ParentId")) {
       var parentId = child.attr("ParentId").value();
       var parentInstance  = baseUri + "concept/" + parentId;
@@ -53,6 +62,10 @@ cn.forEach(function(child, i) {
       writer.addTriple(t(parentInstance, narrower, conceptInstance));
     }
 
+    // Add preflabel, altlabel and scopenote of concept if applicable
+    // preflabel is derived from the label, for the different languages
+    // altlabel is derived from the synonyms (so multiple altlabels are possible), for the different languages
+    // scopenote is derived from the note, for the different languages
     var EL10ns = child.get("Localizations");
     EL10ns.childNodes().forEach(function(l10n) {
       if (l10n.name() == "Localization") {
@@ -90,7 +103,7 @@ cn.forEach(function(child, i) {
 });
 process.stderr.write('\n');
 
-// Hardcode some additional category above "PERSONEN EN TITELS [x]"
+// Hardcode an additional category above "PERSONEN EN TITELS [x]"
 var personenEnTitels = baseUri + "concept/" + ++lastId;
 writer.addTriple(t(personenEnTitels, a, Concept));
 writer.addTriple(t(personenEnTitels, inScheme, thesaurusInstance));
@@ -103,6 +116,7 @@ ids_PERSONEN_EN_TITELS.forEach(function(p) {
   writer.addTriple(t(personenEnTitels, narrower, baseUri + "concept/" + p));
 });
 
+// Determine all 'related' concepts
 var ERel = o.get("//Thesauri/Thesaurus/Relations");
 var rn = ERel.childNodes();
 var totalRelations = rn.length;
@@ -120,8 +134,10 @@ rn.forEach(function(child, i) {
 });
 process.stderr.write('\n');
 
+// Flush written triples to stdout
 writer.end(function (error, result) { console.log(result); });
 
+// Helper function to create a triple
 function t(s, p, o) {
   return {
     subject:   s,
